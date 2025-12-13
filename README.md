@@ -4,7 +4,7 @@
 
 <div align="center">
 
-# 👨‍💻 lamentpicasso
+# 🐋 lamentpicasso
 
 [![Telegram](https://img.shields.io/badge/Telegram-@lamentpicasso-blue?style=for-the-badge&logo=telegram)](https://t.me/lamentpicasso)
 [![GitHub](https://img.shields.io/badge/GitHub-lamentpicasso-black?style=for-the-badge&logo=github)](https://github.com/lamentpicasso)
